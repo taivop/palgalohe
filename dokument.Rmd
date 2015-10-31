@@ -1,0 +1,158 @@
+---
+title: "Palgalõhe"
+author: "Taivo Pungas"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    css: resources/custom.css
+---
+
+```{r, include=FALSE}
+library(dplyr)
+library(rvest)
+library(readxl)
+library(reshape2)
+library(ggplot2)
+library(knitr)
+library(printr)
+
+# Knitr'i seaded
+opts_knit$set(fig.width=6)
+
+# Seaded, mis on kõigile graafikutele ühised
+graafikute_seaded =
+  theme_bw() +
+  theme(panel.grid.minor=element_blank())
+```
+
+# Andmete lugemine ja puhastamine
+
+Loeme sisse palgatabelid:
+```{r}
+palgad_kov <- read_excel("data/palgad_kov.xlsx",
+                  col_types=c(rep("text", 6), "numeric", "numeric")) %>%
+  mutate(Tüüp="Kohalik omavalitsus")
+palgad_riik <- read_excel("data/palgad_riik.xlsx",
+                         col_types=c(rep("text", 6), "numeric", "numeric")) %>%
+  mutate(Tüüp="Riigiasutus")
+```
+
+Loeme sisse nimetabeli, mis näitab iga eesnime sugu:
+```{r, warning=FALSE}
+source("loe_nimed.R")
+nimetabel = loo_nimetabel()
+```
+
+Ühendame ja puhastame andmed ja viime need paremale kujule:
+```{r}
+palgad <- rbind(palgad_kov, palgad_riik) %>%
+  # Arvutame palga, mis vastaks täiskoormusele
+  mutate(Täiskoormusega=Põhipalk/Koormus) %>%
+  # Ümardame täisarvuni
+  mutate(Põhipalk=round(Põhipalk), Täiskoormusega=round(Täiskoormusega)) %>%
+  # Teeme ametikoha kirjelduse väiketähtedeks
+  mutate(Ametikoht=tolower(Ametikoht)) %>%
+  # Eemaldame eesnimetud
+  filter(!is.na(Eesnimi)) %>%
+  # Eemaldame eesnime lõpust ja algusest tühikud
+  mutate(Eesnimi=sub("\\s+$", "", Eesnimi)) %>%
+  # Lisame nimetabeli info
+  left_join(nimetabel, by=c("Eesnimi"="Nimi")) %>%
+  # Valime ainult meile vajalikud tunnused
+  select(Tüüp, Asutus, Struktuuriüksus, Ametikoht, Koormus, Põhipalk,
+         Täiskoormusega, Eesnimi, Mees, Naine) %>%
+  # Lisame tunnuse Sugu
+  mutate(Sugu=as.factor(ifelse(Mees, "Mees", "Naine")))
+```
+
+Andmepunkte on `r nrow(palgad)`.
+
+```{r, warning=FALSE}
+palgad <- palgad %>%
+  # Eemaldame inimesed, kelle nimi on nii meeste kui naiste nimekirjas
+  filter(!(Mees && Naine)) %>%
+  # Eemaldame inimesed, kelle sugu me ei tea
+  filter(!is.na(Mees))
+```
+
+Andmepunkte on nüüd `r nrow(palgad)`.
+
+
+# Palgalõhe
+
+Meeste vs naiste keskmine ja mediaanpalk
+```{r}
+palgad %>%
+  group_by(Sugu) %>%
+  summarise(`Keskmine palk`=mean(Täiskoormusega),
+            `Mediaanpalk`=median(Täiskoormusega))
+```
+
+Meeste ja naiste mediaanpalga erinevus riigiasutustes vs KOVides
+```{r}
+palgad %>%
+  group_by(Sugu, Tüüp) %>%
+  summarise(`Keskmine palk`=mean(Täiskoormusega),
+            `Mediaanpalk`=median(Täiskoormusega)) %>%
+  ungroup() %>%
+  arrange(Tüüp)
+```
+
+Palkade jaotus riigiasutustes ja KOVides soo kaupa:
+```{r, warning=FALSE}
+ggplot(palgad) +
+  geom_bar(aes(x=Täiskoormusega, fill=Sugu)) +
+  scale_fill_brewer(palette="Accent") +
+  facet_wrap(~Sugu + Tüüp, nrow=2, ncol=2, scales="free_y") +
+  xlab("Palk täiskoormusega (€)") +
+  ylab("Töötajate arv") +
+  graafikute_seaded
+```
+
+
+# Kirjeldav statistika
+
+Koormuste jaotus:
+```{r}
+palgad %>%
+  group_by(Koormus) %>%
+  summarise(`Töötajate arv`=n()) %>%
+  arrange(desc(Koormus))
+```
+
+Suurimad asutused:
+```{r}
+palgad %>%
+  group_by(Asutus) %>%
+  summarise(Inimesi=n()) %>%
+  arrange(desc(Inimesi)) %>%
+  head(20) %>%
+  mutate(taivo=5)
+```
+
+Levinumad ametinimetused:
+```{r}
+palgad %>%
+  group_by(Ametikoht) %>%
+  summarise(Inimesi=n()) %>%
+  arrange(desc(Inimesi)) %>%
+  head(20)
+```
+
+Levinumad eesnimed koos sooga:
+```{r}
+palgad %>%
+  filter(Sugu=="Naine") %>%
+  group_by(Eesnimi) %>%
+  summarise(Arv=n()) %>%
+  arrange(desc(Arv)) %>%
+  head(10)
+
+palgad %>%
+  filter(Sugu=="Mees") %>%
+  group_by(Eesnimi) %>%
+  summarise(Arv=n()) %>%
+  arrange(desc(Arv)) %>%
+  head(10)
+```
